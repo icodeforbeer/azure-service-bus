@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Threading.Tasks;
 using System.Threading;
+using System.Configuration;
 using Microsoft.Azure.Management.ServiceBus;
 using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.IdentityModel.Clients.ActiveDirectory;
@@ -8,43 +9,68 @@ using Microsoft.Rest;
 
 namespace SBGeoDR2
 {
-    static class Program
+    class Program
     {
-        static string subscriptionId = "your subscription id"; // Pick existing subscription
-        static string resourceGroupName = "your resource group name"; // Pick existing resource group       
-
-        static string activeDirectoryAuthority = "https://login.microsoftonline.com";
-        static string resourceManagerUrl = "https://management.azure.com/";
-
-        // Use the following link to learn how to setup an client app in access Active Directory
-        // and grant that app rights to your azure subscription
-        // https://msdn.microsoft.com/en-us/library/azure/dn790557.aspx#bk_portal
-        // Respectively follow this: https://docs.microsoft.com/en-us/azure/azure-resource-manager/resource-group-create-service-principal-portal
-        // To get the below three values. Make sure to add the application as owner in your resource group via "Access control (IAM)".
-
-        static string tenantId = "your tenant / directory id";     // Directory ID in portal
-        static string clientId = "your client / application id";    //Application ID in portal
-        static string clientSecret = "your clientSecret / key"; // Key in portal
-
+        static readonly string subscriptionId = ConfigurationManager.AppSettings["subscriptionId"];
+        static readonly string resourceGroupName = ConfigurationManager.AppSettings["resourceGroupName"];
+        static readonly string activeDirectoryAuthority = ConfigurationManager.AppSettings["activeDirectoryAuthority"];
+        static readonly string resourceManagerUrl = ConfigurationManager.AppSettings["resourceManagerUrl"];
+        static readonly string tenantId = ConfigurationManager.AppSettings["tenantId"];
+        static readonly string clientId = ConfigurationManager.AppSettings["clientId"];
+        static readonly string clientSecret = ConfigurationManager.AppSettings["clientSecret"];
         
-        static string geoDRPrimaryNS = "your primary ns";
-        static string geoDRSecondaryNS = "your secondary ns";
-        static string alias = "your alias";
+        static readonly string geoDRPrimaryNS = ConfigurationManager.AppSettings["geoDRPrimaryNS"];
+        static readonly string geoDRSecondaryNS = ConfigurationManager.AppSettings["geoDRSecondaryNS"];
+        static readonly string alias = ConfigurationManager.AppSettings["alias"];
 
         static void Main(string[] args)
         {
-            MainAsync().GetAwaiter().GetResult();
+            //MainAsync().GetAwaiter().GetResult();
+
+            Console.WriteLine ("Choose an action:");
+            Console.WriteLine ("[A] Create or update namespaces, pair them and create a few entities");
+            Console.WriteLine ("[B] Failover");
+            Console.WriteLine ("[C] Break pairing");
+            Console.WriteLine ("[D] Delete Alias in case of break pairing was executed and no failover happened.");
+            Console.WriteLine ("[E] Delete Alias after Failover.");
+
+            Char key = Console.ReadKey(true).KeyChar;
+            String keyPressed = key.ToString().ToUpper();            
+
+            switch (keyPressed)
+            {
+                case "A":
+                    CreatePairing().GetAwaiter().GetResult();
+                    break;
+                case "B":
+                    ExecuteFailover().GetAwaiter().GetResult();
+                    break;
+                case "C":
+                    BreakPairing().GetAwaiter().GetResult();
+                    break;
+                case "D":
+                    DeleteAliasPrim().GetAwaiter().GetResult();
+                    break;
+                case "E":
+                    DeleteAliasSec().GetAwaiter().GetResult();
+                    break;
+                default:
+                    Console.WriteLine("Unknown command, press enter to exit");
+                    Console.ReadLine();
+                    break;
+            }
         }
 
-        static async Task MainAsync()
-        {
+        static async Task CreatePairing()
+        {            
             // https://msdn.microsoft.com/en-us/library/azure/dn790557.aspx#bk_portal
             string token = await GetAuthorizationHeaderAsync().ConfigureAwait(false);
 
             TokenCredentials creds = new TokenCredentials(token);
             ServiceBusManagementClient client = new ServiceBusManagementClient(creds) { SubscriptionId = subscriptionId };
             
-            //// 1. Create Primary Namespace (optional)            
+            // 1. Create Primary Namespace (optional)        
+            Console.WriteLine("Create or update namespace 1");
             var namespaceParams = new SBNamespace
             {
                 Location = "South Central US",
@@ -57,7 +83,8 @@ namespace SBGeoDR2
             var namespace1 = await client.Namespaces.CreateOrUpdateAsync(resourceGroupName, geoDRPrimaryNS, namespaceParams)
                 .ConfigureAwait(false);
 
-            //// 2. Create Secondary Namespace (optional if you already have an empty namespace available)
+            // 2. Create Secondary Namespace (optional if you already have an empty namespace available)
+            Console.WriteLine("Create or update namespace 2");
             var namespaceParams2 = new SBNamespace
             {
                 Location = "North Central US",
@@ -68,17 +95,18 @@ namespace SBGeoDR2
                 }
             };
 
-            //// If you re-run this program while namespaces are still paired this operation will fail with a bad request.
-            //// this is because we block all updates on secondary namespaces once it is paired
+            // If you re-run this program while namespaces are still paired this operation will fail with a bad request.
+            // this is because we block all updates on secondary namespaces once it is paired
             var namespace2 = await client.Namespaces.CreateOrUpdateAsync(resourceGroupName, geoDRSecondaryNS, namespaceParams2)
                 .ConfigureAwait(false);
 
-            // 3. Pair the namespaces to enable DR.            
+            // 3. Pair the namespaces to enable DR.   
+            Console.WriteLine("Starting Pairing");
             ArmDisasterRecovery drStatus = await client.DisasterRecoveryConfigs.CreateOrUpdateAsync(
                 resourceGroupName,
                 geoDRPrimaryNS,
                 alias,
-                new ArmDisasterRecovery { PartnerNamespace = geoDRSecondaryNS })
+                new ArmDisasterRecovery { PartnerNamespace = namespace2.Id })
                 .ConfigureAwait(false);
 
             while (drStatus.ProvisioningState != ProvisioningStateDR.Succeeded)
@@ -91,27 +119,93 @@ namespace SBGeoDR2
                     alias);
 
                 Thread.CurrentThread.Join(TimeSpan.FromSeconds(30));
-            }                        
+            }
 
+            Console.WriteLine("Creating test entities to show pairing.");
             await client.Topics.CreateOrUpdateAsync(resourceGroupName, geoDRPrimaryNS, "myTopic", new SBTopic())
                 .ConfigureAwait(false);
             await client.Subscriptions.CreateOrUpdateAsync(resourceGroupName, geoDRPrimaryNS, "myTopic", "myTopic-Sub1", new SBSubscription())
                 .ConfigureAwait(false);
 
-            // sleeping to allow metadata to sync across primary and secondary
+            // Sleeping to allow metadata to sync across primary and secondary
             await Task.Delay(TimeSpan.FromSeconds(60));
-            
-            // 6. Failover. Note that this Failover operations is ALWAYS run against the secondary ( because primary might be down at time of failover )
-            // client.DisasterRecoveryConfigs.FailOver(resourceGroupName, geoDRSecondaryNS, alias);            
 
-            // other possible DR operations
+            Console.WriteLine("Initial setup complete. Please see in the portal if all resources have been created as expected.");
+            Console.WriteLine("Try creating a few additional entities in the primary in the portal.");
+            Console.WriteLine("Press enter to exit.");
+            Console.ReadLine();            
+        }
 
-            // 7. Break Pairing
-            // client.DisasterRecoveryConfigs.BreakPairing(resourceGroupName, geoDRPrimaryNS, alias);
+        static async Task ExecuteFailover()
+        {
+            // https://msdn.microsoft.com/en-us/library/azure/dn790557.aspx#bk_portal
+            string token = await GetAuthorizationHeaderAsync().ConfigureAwait(false);
 
-            // 8. Delete DR config (alias)
-            // note that this operation needs to run against the namespace that the alias is currently pointing to
-            // client.DisasterRecoveryConfigs.Delete(resourceGroupName, geoDRPrimaryNS, alias);
+            TokenCredentials creds = new TokenCredentials(token);
+            ServiceBusManagementClient client = new ServiceBusManagementClient(creds) { SubscriptionId = subscriptionId };            
+
+            // Failover. Note that this Failover operations is ALWAYS run against the secondary ( because primary might be down at time of failover )
+            Console.WriteLine("Initiating failover. Management operations can take 1-2 minutes to take effect.");
+            client.DisasterRecoveryConfigs.FailOver(resourceGroupName, geoDRSecondaryNS, alias);
+
+            // Sleeping to allow the break pairing to happen
+            Console.WriteLine("Waiting for failover to complete.");
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            Console.WriteLine("Failover Complete, press enter to exit.");
+            Console.ReadLine();
+        }
+
+        static async Task BreakPairing()
+        {
+            // https://msdn.microsoft.com/en-us/library/azure/dn790557.aspx#bk_portal
+            string token = await GetAuthorizationHeaderAsync().ConfigureAwait(false);
+
+            TokenCredentials creds = new TokenCredentials(token);
+            ServiceBusManagementClient client = new ServiceBusManagementClient(creds) { SubscriptionId = subscriptionId };
+
+            // Break Pairing
+            Console.WriteLine("Disabling pairing. Management operations can take 1-2 minutes to take effect.");
+            client.DisasterRecoveryConfigs.BreakPairing(resourceGroupName, geoDRPrimaryNS, alias);
+
+            // sleeping to allow the break pairing to happen
+            Console.WriteLine("Waiting for break pairing to complete.");
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            Console.WriteLine("Break pairing complete. Press enter to exit.");
+            Console.ReadLine();
+        }
+
+        static async Task DeleteAliasPrim()
+        {
+            // https://msdn.microsoft.com/en-us/library/azure/dn790557.aspx#bk_portal
+            string token = await GetAuthorizationHeaderAsync().ConfigureAwait(false);
+
+            TokenCredentials creds = new TokenCredentials(token);
+            ServiceBusManagementClient client = new ServiceBusManagementClient(creds) { SubscriptionId = subscriptionId };
+
+            Console.WriteLine("Deleting the alias. Management operations can take 1-2 minutes to take effect.");
+            client.DisasterRecoveryConfigs.Delete(resourceGroupName, geoDRPrimaryNS, alias);
+
+            Console.WriteLine("Wait for the alias to be deleted.");
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            Console.WriteLine("Alias deleted. Press enter to exit.");
+            Console.ReadLine();
+        }
+
+        static async Task DeleteAliasSec()
+        {
+            // https://msdn.microsoft.com/en-us/library/azure/dn790557.aspx#bk_portal
+            string token = await GetAuthorizationHeaderAsync().ConfigureAwait(false);
+
+            TokenCredentials creds = new TokenCredentials(token);
+            ServiceBusManagementClient client = new ServiceBusManagementClient(creds) { SubscriptionId = subscriptionId };
+
+            Console.WriteLine("Deleting the alias. Management operations can take 1-2 minutes to take effect.");
+            client.DisasterRecoveryConfigs.Delete(resourceGroupName, geoDRSecondaryNS, alias);
+
+            Console.WriteLine("Wait for the alias to be deleted.");
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            Console.WriteLine("Alias deleted. Press enter to exit.");
+            Console.ReadLine();
         }
 
         private static async Task<string> GetAuthorizationHeaderAsync()
