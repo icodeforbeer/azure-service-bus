@@ -131,9 +131,14 @@ model is strongly encouraged at all times as it yields significantly more effici
 * **Session State** - The [SessionState](./SessionState) sample shows how to keep track of processing a workflow using 
   the session state feature. 
  
-### Windows Communication Foundation (WCF) Binding
+### Management Operations
+
+* **Managing entities** - The [QueueCRUD](./ManagingEntities/QueueCRUD) sample shows how to create a new entity, retrieve an existing
+  entity and its properties, update the properties (which can be udpated), and also delete the entity.
+* **SASAuthorizationRule** - The [SASAuthorizationRule](./ManagingEntities/SASAuthorizationRule) sample shows how to create a new 
+  SAS authentication policy for a particular entity with a limited scope of Send or Listen.
   
-* **NetMessagingBinding** - The [NetMessagingBinding](./NetMessagingBinding) sample shows how to use Service Bus Queues 
-   and Topics seamlessly the context of WCF applications using the NetMessagingBinding.
-* **Sessions with the NetMessagingBinding** - The [NetMessagingSession](./NetMessagingSession) sample shows how to use Service Bus
-  sessions with the NetMessagingBinding.
+### External Samples
+
+* **Authentication using Managed Service Identity** - The [MSI_Authentication](https://github.com/Azure-Samples/app-service-msi-servicebus-dotnet) sample shows how to send and receive data from Azure Service Bus Queue at run-time from an App Service with a Managed Service Identity (MSI) 
+* **High throughput performance sample** - The [PerformanceSample](https://github.com/Azure-Samples/service-bus-dotnet-messaging-performance) can be used to help benchmark Service Bus premium messaging, and can be used for performance best practices. 
